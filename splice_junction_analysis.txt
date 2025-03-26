@@ -1,0 +1,20 @@
+library(tidyverse)
+
+intra <- read_tsv(file = "/media/danielbishop/T7/Splicing Project/03-Igf1_celltype_bams/intra.tsv")
+intra <- read_tsv(file = "/media/danielbishop/T7/Splicing Project/04-alfred/10X_17_048.VESSEL_BECs.intra")
+intra
+
+colnames(intra) <- c("gene", "exonA", "exonB", "count")
+intra
+
+intra %>%
+  filter(
+    # gene == "Igf1",
+         count != 0) %>%
+  mutate(exonA_end = str_match(string = exonA, pattern = "-(\\d+)$")[,2],
+         exonB_start = str_match(string = exonB, pattern = ":(\\d+)-")[,2]) %>%
+  select(exonA_end, exonB_start, count) %>%
+  distinct() %>%
+  mutate(proportion = count / sum(count))
+  
+  
