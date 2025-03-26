@@ -1,0 +1,1684 @@
+#This code will not run as currently presented.
+
+library(tidyverse)
+library(Seurat)
+library(ggridges)
+
+# if (!requireNamespace("remotes", quietly = TRUE)) {
+#   install.packages("remotes")
+# }
+# remotes::install_github("mojaveazure/seurat-disk")
+
+library(patchwork)
+library(SeuratDisk)
+
+#conda activate R-4.2.2
+
+# System-specific parameters ----------------------------------------------
+
+system <- "poseidon" # Options are: poseidon, level10
+  
+if(system == "poseidon"){
+  base_path = "/media/danielbishop/T7/scRNA"
+} else if (system == "level10"){
+  base_path = "test/scRNA"
+}
+
+print(base_path)
+
+
+# Setup -------------------------------------------------------------------
+
+data_dir <- paste(base_path, "data", sep = "/")
+out_dir <- paste(base_path, "output", sep = "/")
+dir.create(out_dir)
+setwd(out_dir)
+
+
+marker_genes <- c("Col1a1", "Lum", "Ptn", "Itih5", "Twist2", "Col3a1", "Nfia", "Mdk", "Krt14", "Krt15", "Krt17", "Krt5", "Pdgfa", "Epcam", "Lhx2", "Bmp7", "Plp1", "Fabp7", "Rgs5", "Acta2", "Pecam1", "Kdr", "Cd52", "Myod1", "Pax7", "Map2", "Stmn3")
+
+#Can now skip code down to integration and load integrated.data 
+
+# Process data ------------------------------------------------------------
+
+
+
+
+# Load raw counts
+e13_counts <- Read10X_h5(paste(data_dir, "E13-5", "filtered_feature_bc_matrix.h5", sep = "/"))
+e16_counts <- Read10X_h5(paste(data_dir, "E16-5", "filtered_feature_bc_matrix.h5", sep = "/"))
+p0_counts  <- Read10X_h5(paste(data_dir, "P0", "filtered_feature_bc_matrix.h5", sep = "/"))
+
+
+# Create Seurat objects
+e13 <- CreateSeuratObject(e13_counts, project = "e13", min.cells = 3, min.features = 200)
+e13
+rm(e13_counts)
+gc()
+# 23417 features across 34422 samples within 1 assay
+e13@meta.data %>% head()
+
+e16 <- CreateSeuratObject(e16_counts, project = "e16", min.cells = 3, min.features = 200)
+e16
+rm(e16_counts)
+gc()
+# 21542 features across 7152 samples within 1 assay 
+e16@meta.data %>% head()
+
+p0 <- CreateSeuratObject(p0_counts, project = "p0", min.cells = 3, min.features = 200)
+p0
+rm(p0_counts)
+gc()
+# 21122 features across 9357 samples within 1 assay 
+p0@meta.data %>% head()
+
+
+# Combining all Seurat objects into one object
+merged <- reduce(list(e13, e16, p0), merge)
+merged
+# 24172 features across 50931 samples within 1 assay 
+merged@meta.data %>% head()
+
+rm(e13, e16, p0)
+gc()
+#Garbage Cleanup to Reduce RAM Consumption
+
+#To Separate Merged into Individual Lists
+# merged
+# test <- SplitObject(object = merged, split.by = "orig.ident")
+# class(test)
+# test
+
+# rm(test)
+# gc()
+
+#Quality Control
+merged[["percent.mt"]] <- PercentageFeatureSet(merged, pattern = "^mt-")
+
+merged@meta.data <-
+  merged@meta.data %>%                             #
+  as_tibble(rownames = NA) %>%                     #Convert Data Frame to Tibble, convert rows to columns as rows disrupt tibbles
+  rownames_to_column(var = "barcode") %>%          #
+
+# # Set adaptive QC thresholds, then see if they look appropriate
+# merged@meta.data <- 
+#   merged@meta.data %>%                             #
+#   as_tibble(rownames = NA) %>%                     #Convert Data Frame to Tibble, convert rows to columns as rows disrupt tibbles
+#   rownames_to_column(var = "barcode") %>%          #
+#   group_by(orig.ident) %>%                         #
+#   mutate(counts_max = median(nCount_RNA) + 3 * mad(nCount_RNA),             #Set thresholds for counts, features and mt via median absolute deviation
+#          counts_min = median(nCount_RNA) - 3 * mad(nCount_RNA),
+#          features_max = median(nFeature_RNA) + 3 * mad(nFeature_RNA),
+#          features_min = median(nFeature_RNA) - 3 * mad(nFeature_RNA),
+#          mito_max = median(percent.mt) + 3 * mad(percent.mt),
+#          mito_min = median(percent.mt) - 3 * mad(percent.mt),
+#          pass_nCount = ifelse(test = nCount_RNA < counts_max & nCount_RNA > counts_min, yes = "pass", no = "fail"),                    #Pass, fail test for counts, features and mt via MAD
+#          pass_nFeature = ifelse(test = nFeature_RNA < features_max & nFeature_RNA > features_min, yes = "pass", no = "fail"),
+#          pass_mt = ifelse(test = percent.mt < mito_max & percent.mt > mito_min, yes = "pass", no = "fail"),
+#          keep = ifelse(test = pass_nCount == "pass" & pass_nFeature == "pass" & pass_mt == "pass", yes = TRUE, no = FALSE)) %>%
+#   column_to_rownames(var = "barcode")           # Convert from Tibble back to Data Frame
+
+merged@meta.data %>% head()
+
+
+# Now investigate whether these thresholds are appropriate
+
+#####################
+VlnPlot(merged, features = c("nFeature_RNA", "nCount_RNA", "percent.mt"), ncol = 3)
+ggsave(filename = "test.png", width = 15)
+
+
+#Nick-made violin scatter plot for 1 feature (nFeature_RNA)
+merged@meta.data %>%
+  ggplot(aes(x = nFeature_RNA, y = orig.ident)) +
+  geom_density_ridges2(jittered_points = TRUE,
+                                 quantile_lines = TRUE, quantiles = 2, vline_colour = "red", vline_size = 1,
+                                 position = position_raincloud(height = 0.4, adjust_vlines = FALSE),
+                                 scale = 0.4, alpha = 0.2
+                                 # Optionally remove the trailing distribution tails
+                                 # rel_min_height = 0.05
+  ) +
+  coord_flip() +
+  labs(caption = "red line indicates median value") +
+  theme_bw() +
+  theme(axis.text.x = element_text(angle = 900))
+ggsave(filename = "merged_nfeature_RNA.png", bg = "white")
+#ggsave(filename = "output/merged_nfeature_RNA_Nick.svg", device = svglite::svglite, width = 12, height = 6) #Not Working Yet
+
+
+#Nick-made violin scatter plot for all features on same plot
+merged@meta.data %>%
+  rownames_to_column(var = "barcode") %>%
+  as_tibble() %>%
+  pivot_longer(cols = -c(barcode, orig.ident), names_to = "metric", values_to = "value") %>%
+  ggplot(aes(x = value, y = orig.ident)) +
+  ggridges::geom_density_ridges2(jittered_points = TRUE,
+                                 quantile_lines = TRUE, quantiles = 2, vline_colour = "red", vline_size = 1,
+                                 position = position_raincloud(height = 0.4, adjust_vlines = FALSE),
+                                 scale = 0.4, alpha = 0.2
+                                 # Optionally remove the trailing distribution tails
+                                 # rel_min_height = 0.05
+   ) +
+  coord_flip() +
+  labs(caption = "red line indicates median value") +
+  theme_bw() +
+  theme(axis.text.x = element_text(angle = 90)) +
+  facet_wrap(~ metric, scales = "free")
+ggsave(filename = "merged_Violin_Scatter.png", bg = "white")
+
+# Same but log2
+merged@meta.data %>%
+  rownames_to_column(var = "barcode") %>%
+  as_tibble() %>%
+  pivot_longer(cols = -c(barcode, orig.ident), names_to = "metric", values_to = "value") %>%
+  mutate(value = log2(value + 1)) %>%
+  ggplot(aes(x = value, y = orig.ident)) +
+  ggridges::geom_density_ridges2(jittered_points = TRUE,
+                                 quantile_lines = TRUE, quantiles = 2, vline_colour = "red", vline_size = 1,
+                                 position = position_raincloud(height = 0.4, adjust_vlines = FALSE),
+                                 scale = 0.4, alpha = 0.2
+                                 # Optionally remove the trailing distribution tails
+                                 # rel_min_height = 0.05
+  ) +
+  coord_flip() +
+  labs(subtitle = "log2 values",
+       caption = "red line indicates median value") +
+  theme_bw() +
+  theme(axis.text.x = element_text(angle = 90)) +
+  facet_wrap(~ metric, scales = "free")
+
+
+
+
+#Seurat Feature Scatter
+plot1 <- FeatureScatter(merged, feature1 = "nCount_RNA", feature2 = "percent.mt")
+plot2 <- FeatureScatter(merged, feature1 = "nCount_RNA", feature2 = "nFeature_RNA")
+plot1 + plot2
+
+
+merged@meta.data %>%
+  as_tibble(rownames = NA) %>%
+  rownames_to_column(var = "barcode") %>%
+  group_by(orig.ident) %>%
+  summarise(n = n())
+
+
+#Nick Feature Scatter
+merged@meta.data %>%
+  as_tibble() %>%
+  ggplot(aes(x = nCount_RNA, y = percent.mt)) +
+  geom_point(alpha = 0.25) +
+  theme_bw() +
+  facet_wrap(~ orig.ident)
+ggsave(filename = "merged_feature_scatter.png", bg = "white")
+
+# VlnPlot(object = merged, features = "nCount_RNA")
+
+
+# RidgePlot(merged, features = c("Igf1", "Gata2"))
+
+
+#Doublet Detection
+# if (!require("BiocManager", quietly = TRUE)) # Install Package for Doublet Detection
+#   install.packages("BiocManager")
+
+# BiocManager::install("scDblFinder")
+
+library(scDblFinder)
+
+dbl <- scDblFinder(sce = GetAssayData(merged), k = 20, samples = merged@meta.data$orig.ident) #Run Doublet Detection on 'merged' dataset
+
+dbl@colData %>%                                  #Visual representation of doublet detection
+  as_tibble(rownames = NA) %>%
+  rownames_to_column(var = "barcode") %>%
+  select(barcode, scDblFinder.sample, scDblFinder.class) %>%
+  group_by(scDblFinder.sample, scDblFinder.class) %>%
+  summarise(n = n()) %>%
+  mutate(total = sum(n),
+         proportion = n / total) %>%
+  filter(scDblFinder.class == "doublet")
+
+#Merging doublet detection into object and filtering out doublets from data
+merged@meta.data <- 
+merged@meta.data %>%
+  as_tibble(rownames = NA) %>%
+  rownames_to_column(var = "barcode") %>%
+  left_join(y = dbl@colData %>%                                  #Visual representation of doublet detection
+              as_tibble(rownames = NA) %>%
+              rownames_to_column(var = "barcode"), by = "barcode") %>%
+  column_to_rownames(var = "barcode")
+
+
+# Subset to singlet cells
+singlets <- subset(merged, subset = scDblFinder.class == "singlet")
+singlets
+# This contains only the singlet cells
+
+
+# Eploratory clustering ---------------------------------------------------
+
+# Cluster the data and visualise QC metrics to help decide thresholds
+scaled_singlets <- singlets %>%
+  NormalizeData() %>%
+  FindVariableFeatures() %>%
+  ScaleData(features = rownames(.)) 
+
+scaled_singlets <-
+  scaled_singlets %>%
+  RunPCA(features = VariableFeatures(scaled_singlets)) %>%
+  FindNeighbors(dims = 1:30)
+                
+scaled_singlets %>%
+  FindClusters(resolution = 0.8) %>%
+  RunUMAP(dims = 1:30) %>%
+  DimPlot()
+# 31 clusters
+
+scaled_singlets %>%
+  FindClusters(resolution = 0.1) %>%
+  RunUMAP(dims = 1:30) %>%
+  DimPlot()
+# 13 clusters
+
+scaled_singlets %>%
+  FindClusters(resolution = 0.15) %>%
+  RunUMAP(dims = 1:30) %>%
+  DimPlot()
+# 15 clusters
+
+scaled_singlets %>%
+  FindClusters(resolution = 0.15) %>%
+  RunTSNE(dims = 1:30) %>%
+  DimPlot()
+# 15 clusters
+ggsave(filename = "15Clusters_QC.png", bg = "white")
+
+test_reduction <-
+  scaled_singlets %>%
+  FindClusters(resolution = 0.15) %>%
+  RunTSNE(dims = 1:30) %>%
+  RunUMAP(dims = 1:30)
+# 15 clusters
+
+
+test_reduction %>%
+  DotPlot(features = marker_genes) +
+  theme(axis.text.x = element_text(angle = 90, hjust = 1, vjust = 0.5))
+ggsave(filename = "Test_Cluster_DotPlot.png", bg = "white")
+
+test_reduction@meta.data %>%
+  rownames_to_column(var = "barcode") %>%
+  as_tibble() %>%
+  select(barcode, orig.ident, nCount_RNA, nFeature_RNA, percent.mt, seurat_clusters) %>%
+  pivot_longer(cols = c(nCount_RNA, nFeature_RNA, percent.mt), names_to = "metric", values_to = "value") %>%
+  ggplot(aes(x = value, y = seurat_clusters)) +
+  ggridges::geom_density_ridges2(jittered_points = TRUE,
+                                 quantile_lines = TRUE, quantiles = 2, vline_colour = "red", vline_size = 1,
+                                 position = position_raincloud(height = 0.4, adjust_vlines = FALSE),
+                                 scale = 0.4, alpha = 0.2
+                                 # Optionally remove the trailing distribution tails
+                                 # rel_min_height = 0.05
+  ) +
+  coord_flip() +
+  labs(caption = "red line indicates median value") +
+  theme_bw() +
+  theme(axis.text.x = element_text(angle = 90)) +
+  facet_wrap(~ metric, scales = "free")
+ggsave(filename = "QCmetrics_for_clustering.png", bg = "white")
+
+test_reduction %>%
+  FeaturePlot(features = c("nCount_RNA", "nFeature_RNA", "percent.mt"))
+
+# TODO: Filter based on QC criteria
+
+# Paper criteria
+# - nCount >200, >3
+# - nFeature <1750
+# - 
+
+dim(singlets)
+# [1] 24172 43111
+
+
+filtered <- subset(singlets, subset = percent.mt < 10)
+dim(filtered)
+# [1] 24172 40496
+
+# Save the filtered dataset
+SaveH5Seurat(object = filtered, 
+             filename = "filtered_data.h5Seurat",
+             overwrite = TRUE)
+
+rm(dbl, merged, scaled_singlets, test_reduction, singlets)
+gc()
+
+
+
+# Integration -------------------------------------------------------------
+
+# Paper use CCA to integrate samples; we'll use the normal Seurat approach:
+# https://satijalab.org/seurat/articles/integration_introduction.html
+
+# Reload data if necessary
+filtered <- LoadH5Seurat(file = "filtered_data.h5Seurat")
+
+filtered.list <- SplitObject(filtered, split.by = "orig.ident")
+
+filtered.list <- lapply(X = filtered.list, FUN = function(x) {
+  x <- NormalizeData(x)
+  x <- FindVariableFeatures(x, selection.method = "vst", nfeatures = 2000)
+})
+
+features <- SelectIntegrationFeatures(object.list = filtered.list)
+
+anchors <- FindIntegrationAnchors(object.list = filtered.list, anchor.features = features)
+
+data.combined <- IntegrateData(anchorset = anchors)
+
+#SaveH5Seurat(object = data.combined, 
+#            filename = "integrated_data.h5Seurat",
+#            overwrite = TRUE)
+
+
+data.combined <- LoadH5Seurat(file = "integrated_data.h5Seurat")
+
+
+DefaultAssay(data.combined) <- "integrated"
+
+data.combined <- ScaleData(data.combined, verbose = FALSE)
+data.combined <- RunPCA(data.combined, npcs = 30, verbose = FALSE)
+data.combined <- RunUMAP(data.combined, reduction = "pca", dims = 1:30)
+data.combined <- FindNeighbors(data.combined, reduction = "pca", dims = 1:30)
+
+#Trying to match number of clusters with Ge 2020
+#FindClusters(data.combined, resolution = 0.4) # 21
+#FindClusters(data.combined, resolution = 0.3) # 18
+#FindClusters(data.combined, resolution = 0.2) # 18
+#FindClusters(data.combined, resolution = 0.1) # 13
+#FindClusters(data.combined, resolution = 0.15) # 14
+
+#Storing clusters in meta data
+data.combined <- FindClusters(data.combined, resolution = 0.15)
+
+
+p1 <- DimPlot(data.combined, reduction = "umap", group.by = "orig.ident")
+p2 <- DimPlot(data.combined, reduction = "umap", label = TRUE, repel = TRUE)
+p1 + p2
+ggsave(filename = "DimPlot_Integration.png", bg = "white")
+
+DimPlot(data.combined, reduction = "umap", split.by = "orig.ident")
+ggsave(filename = "Split_DimPlot_Integration.png", bg = "white")
+
+#Adjusting Labels of DimPlots
+
+DimPlot(data.combined, reduction = "umap", split.by = "orig.ident", label = TRUE, repel = TRUE)
+ggsave(filename = "02-Annotated_Split_DimPlot_Integration.png", bg = "white")
+
+
+# Adding better cluster names to metadata
+data.combined@meta.data <-
+  data.combined@meta.data %>%
+  rownames_to_column(var = "barcode") %>%
+  as_tibble() %>%
+  mutate(cluster_label = case_when(seurat_clusters == 0 ~ "0_Dermal",
+                                   seurat_clusters == 1 ~ "1_Epidermal",
+                                   seurat_clusters == 2 ~ "2_Dermal",
+                                   seurat_clusters == 3 ~ "3_Immune",
+                                   seurat_clusters == 4 ~ "4_Platelets",
+                                   seurat_clusters == 5 ~ "5_Dermal",
+                                   seurat_clusters == 6 ~ "6_Dermal",
+                                   seurat_clusters == 7 ~ "7_Endotheial",
+                                   seurat_clusters == 8 ~ "8_Schwann_Cells",
+                                   seurat_clusters == 9 ~ "9_Haematopoietic_Cells",
+                                   seurat_clusters == 10 ~ "10_Pericytes",
+                                   seurat_clusters == 11 ~ "12_Neural",
+                                   seurat_clusters == 12 ~ "12_Melanocytes",
+                                   seurat_clusters == 13 ~ "13_Muscle"),
+         cluster_label = factor(cluster_label, levels = c("0_Dermal",
+                                                          "1_Epidermal",
+                                                          "2_Dermal",
+                                                          "3_Immune",
+                                                          "4_Platelets",
+                                                          "5_Dermal",
+                                                          "6_Dermal",
+                                                          "7_Endotheial",
+                                                          "8_Schwann_Cells",
+                                                          "9_Haematopoietic_Cells",
+                                                          "10_Pericytes",
+                                                          "12_Neural",
+                                                          "12_Melanocytes",
+                                                          "13_Muscle"))) %>%
+  column_to_rownames(var = "barcode")
+
+# Check
+data.combined@meta.data
+
+p1 <- DimPlot(data.combined, reduction = "umap", group.by = "orig.ident")
+p2 <- DimPlot(data.combined, reduction = "umap", group.by = "cluster_label", label = TRUE, repel = TRUE)
+p1 + p2
+ggsave(filename = "02_Annotated_DimPlot_Integration.png", bg = "white")
+
+
+
+DimPlot(data.combined, reduction = "umap", split.by = "orig.ident", group.by = "cluster_label", label = TRUE, repel = TRUE)
+ggsave(filename = "03-Annotated_Split_DimPlot_Integration.png", bg = "white")
+
+
+#Identifying Clusters
+
+DefaultAssay(data.combined) <- "RNA"
+c6_markers <- FindConservedMarkers(data.combined, ident.1 = 6, grouping.var = "orig.ident", verbose = FALSE)
+head(c6_markers)
+
+
+all_markers <- FindAllMarkers(object = data.combined, only.pos = TRUE, min.pct = 0.25, logfc.threshold = 0.25) #find markers for every cluster compared to all remaining cells, report only the positive ones
+head(all_markers)
+
+all_markers %>%
+  write_csv(file="all_markers.csv")
+
+# Opening all markers for the start of the next session
+all_markers <- read_csv(file="all_markers.csv")
+
+# Create tibble of top 3 markesr for each cluster
+top3 <-
+  all_markers %>%
+  group_by(cluster) %>%
+  slice_max(n = 3, order_by = avg_log2FC)
+top3
+
+# Create a dot plot of top 3 marker genes
+DotPlot(object = data.combined, features = c(unique(top3$gene), "Igf1", "Igf1r")) +
+  theme(axis.text.x = element_text(angle = 90, hjust = 1, vjust = 0.5))
+ggsave(filename = "DotPlot_Top3Genes.png", bg = "white")
+
+DotPlot(object = data.combined, features = c(unique(top3$gene), "Igf1", "Igf1r"), cols = c("dodgerblue", "darkorange2", "red"), split.by = "orig.ident") +
+  theme(axis.text.x = element_text(angle = 90, hjust = 1, vjust = 0.5))
+ggsave(filename = "DotPlot_Top3Genes-SplitOrigIdent.png", bg = "white")
+
+#Create a dot plot of marker genes from paper
+DotPlot(object = data.combined, features = c(marker_genes, "Igf1", "Igf1r")) +
+  theme(axis.text.x = element_text(angle = 90, hjust = 1, vjust = 0.5))
+ggsave(filename = "DotPlot_MarkerGenes.png", bg = "white")
+
+
+DotPlot(object = data.combined, features = c(marker_genes, "Igf1", "Igf1r"),
+        cols = c("dodgerblue", "darkorange2", "red"), 
+        split.by = "orig.ident") +
+  theme(axis.text.x = element_text(angle = 90, hjust = 1, vjust = 0.5))
+ggsave(filename = "DotPlot_MarkerGenes-SplitOrigIdent.png", bg = "white", scale=1.5)
+
+
+
+#Install Cell Chat for RStudio-------------------------------------------------
+
+devtools::install_github("sqjin/CellChat")
+
+install.packages('NMF')
+
+devtools::install_github("jokergoo/circlize")
+
+devtools::install_github("jokergoo/ComplexHeatmap")
+
+
+
+# TODO: compare to findallmarkers
+
+#TODO Finish Integration Tutorial
+
+
+#Subset Cluster 1 to Analyse Epidermal Cells
+
+epidermal <- subset(data.combined, subset = seurat_clusters == 1) 
+epidermal # 4795 cells, 26172 features; active assay is "integrated"
+
+epidermal@meta.data %>% head()
+epidermal@meta.data$cluster_label %>% unique() # Subsetting worked correctly
+
+# I *think* we want to set the assay back to RNA
+# This will give us access to all ~26k genes to pull apart these cells into clusters
+DefaultAssay(epidermal) <- "RNA"
+epidermal
+
+
+epidermal <- FindVariableFeatures(epidermal, selection.method = "vst", nfeatures = 2000)
+# Identify the 10 most highly variable genes
+top10 <- head(VariableFeatures(epidermal), 10)
+top10
+
+# plot variable features with and without labels
+plot1 <- VariableFeaturePlot(epidermal)
+plot2 <- LabelPoints(plot = plot1, points = top10, repel = TRUE)
+plot1 + plot2
+
+all.genes <- rownames(epidermal)
+epidermal <- ScaleData(epidermal, features = all.genes)
+epidermal <- RunPCA(epidermal, features = VariableFeatures(object = epidermal))
+VizDimLoadings(epidermal, dims = 1:2, reduction = "pca")
+DimPlot(epidermal, dims = 1:2, reduction = "pca", group.by = "orig.ident")
+DimHeatmap(epidermal, dims = 1:30, cells = 500, balanced = TRUE)
+ElbowPlot(epidermal, ndims = 50)
+
+epidermal <- FindNeighbors(epidermal, dims = 1:20)
+epidermal <- FindClusters(epidermal, resolution = 0.5) # 11
+head(Idents(epidermal), 5)
+
+epidermal <- RunUMAP(epidermal, dims = 1:20)
+DimPlot(epidermal, reduction = "umap")
+DimPlot(epidermal, reduction = "umap", group.by = "orig.ident")
+
+FeaturePlot(epidermal, features = c("Krt5", "Krt14", "Krt1", "Krt10", "Igf1r", "Igf1"), cols = c("dodgerblue", "yellow", "darkorange2"))
+ggsave(filename = "FeaturePlot_Unintegrated_Cluster1.png", bg = "white", scale=1.5)
+
+
+# Without re-integrating, UMAP splits by sample
+# Try integrating this subset
+
+epidermal <- SplitObject(epidermal, split.by = "orig.ident")
+
+epidermal <- lapply(X = epidermal, FUN = function(x) {
+  x <- NormalizeData(x)
+  x <- FindVariableFeatures(x, selection.method = "vst", nfeatures = 2000)
+})
+
+features <- SelectIntegrationFeatures(object.list = epidermal)
+
+anchors <- FindIntegrationAnchors(object.list = epidermal, anchor.features = features)
+
+epidermal.combined <- IntegrateData(anchorset = anchors)
+
+
+
+DefaultAssay(epidermal.combined) <- "integrated"
+
+epidermal.combined <- ScaleData(epidermal.combined, verbose = TRUE)
+epidermal.combined <- RunPCA(epidermal.combined, npcs = 30, verbose = TRUE)
+epidermal.combined <- RunUMAP(epidermal.combined, reduction = "pca", dims = 1:30)
+epidermal.combined <- FindNeighbors(epidermal.combined, reduction = "pca", dims = 1:30)
+
+
+FindClusters(epidermal.combined, resolution = 0.4) # 11
+FindClusters(epidermal.combined, resolution = 0.1) # 5
+
+
+
+#Storing clusters in meta data
+epidermal.combined <- FindClusters(epidermal.combined, resolution = 0.4)
+
+
+p1 <- DimPlot(epidermal.combined, reduction = "umap", group.by = "orig.ident")
+p2 <- DimPlot(epidermal.combined, reduction = "umap", label = TRUE, repel = TRUE)
+p1 + p2
+ggsave(filename = "DimPlot_Cluster1_Subclusters.png", bg = "white", scale=1.5)
+
+epidermal_markers <- FindAllMarkers(object = epidermal.combined, only.pos = TRUE, min.pct = 0.25, logfc.threshold = 0.25) #find markers for every cluster compared to all remaining cells, report only the positive ones
+head(epidermal_markers)
+
+top3 <-
+  epidermal_markers %>%
+  group_by(cluster) %>%
+  slice_max(n = 3, order_by = avg_log2FC)
+top3
+
+DefaultAssay(epidermal.combined) <- "RNA"
+
+DotPlot(object = epidermal.combined, features = c(unique(top3$gene), "Igf1", "Igf1r")) +
+  theme(axis.text.x = element_text(angle = 90, hjust = 1, vjust = 0.5))
+
+
+DotPlot(object = epidermal.combined, features = c(unique(top3$gene), "Igf1", "Igf1r"), cols = c("dodgerblue", "darkorange2", "red"), split.by = "orig.ident") +
+  theme(axis.text.x = element_text(angle = 90, hjust = 1, vjust = 0.5))
+
+
+FeaturePlot(epidermal.combined, features = c("Krt5", "Krt14", "Krt1", "Krt10","Lor","Ivl"), cols = c("dodgerblue", "yellow", "darkorange2"))
+ggsave(filename = "Cluster1_Keratin_Feature_Plot.png", bg = "white", scale=1.5)
+
+
+FeaturePlot(epidermal.combined, features = c("Igf1r"), cols = c("dodgerblue", "yellow", "darkorange2"))
+DotPlot(epidermal.combined, features =  c("Krt5", "Krt14", "Krt1", "Krt10", "Ivl", "Lor", "Flg", "Sox9", "Krt15", "Cd34", "Tbx1", "Prdm1", "Krt20", "Krt8", "Krt18", "Cd207", "Cd11c", "Sox10", "Mitf", "Igf1r", "Igf1"),
+        cols = c("dodgerblue", "darkorange2", "red"),
+        split.by = "orig.ident")
+
+DotPlot(epidermal.combined, features =  c("Krt5", "Krt14", "Krt1", "Krt10", "Ivl", "Lor", "Flg", "Sox9", "Krt15", "Cd34", "Tbx1", "Prdm1", "Krt20", "Krt8", "Krt18", "Cd207", "Cd11c", "Sox10", "Mitf", "Igf1r", "Igf1"),
+        cols = c("dodgerblue", "darkorange2", "red"))
+
+
+DefaultAssay(data.combined) <- "RNA"
+DotPlot(data.combined, features =  c("Krt5", "Krt14", "Krt1", "Krt10", "Ivl", "Lor", "Flg", "Sox9", "Krt15", "Cd34", "Tbx1", "Prdm1", "Krt20", "Krt8", "Krt18", "Cd207", "Cd11c", "Sox10", "Mitf", "Igf1r", "Igf1"),
+        cols = c("dodgerblue", "darkorange2", "red"))
+
+
+
+FeaturePlot(data.combined, features = c("Krt5", "Krt14", "Krt1", "Krt10"), cols = c("dodgerblue", "yellow", "darkorange2"))
+
+
+FeaturePlot(epidermal.combined, features = c("Igf1r"), cols = c("dodgerblue", "yellow", "darkorange2"))
+DotPlot(epidermal.combined, features =  c("Krt14", "Mt2", "Krt10", "Ptgs1", "Lor", "Flg2", "Krt79", "Krt17", "", "Mgst1", "Scd1", "Postn", "Cd34", "Krt5a", "Krt75", "Cd3", "Thy1", "Cd207", "Ctss"),
+        cols = c("dodgerblue", "darkorange2", "red"),
+        split.by = "orig.ident")
+
+FeaturePlot(epidermal.combined, features = c("Krt14", "Mt2", "Krt10", "Ptgs1", "Lor", "Flg2", "Krt79", "Krt17", "", "Mgst1", "Scd1", "Postn", "Cd34", "Krt5a", "Krt75", "Cd3", "Thy1", "Cd207", "Ctss"), cols = c("dodgerblue", "yellow", "darkorange2"))
+
+
+DotPlot(data.combined, features =  c("Krt14", "Mt2", "Krt10", "Ptgs1", "Lor", "Flg2", "Krt79", "Krt17", "", "Mgst1", "Scd1", "Postn", "Cd34", "Krt5a", "Krt75", "Cd3", "Thy1", "Cd207", "Ctss"),
+        cols = c("dodgerblue", "darkorange2", "yellow"),
+        split.by = "orig.ident")
+
+FeaturePlot(data.combined, features = c("Krt14", "Mt2", "Krt10", "Ptgs1", "Lor", "Flg2", "Krt79", "Krt17", "", "Mgst1", "Scd1", "Postn", "Cd34", "Krt5a", "Krt75", "Cd3", "Thy1", "Cd207", "Ctss"), cols = c("dodgerblue", "yellow", "darkorange2"))
+
+
+
+################################################################################
+
+#epidermal.p1 <- DimPlot(epidermal, reduction = "umap", group.by = "orig.ident")
+#epidermal.p2 <- DimPlot(epidermal, reduction = "umap", label = TRUE, repel = TRUE)
+#epidermal.p1 + epidermal.p2
+
+#epidermal <- ScaleData(epidermal, verbose = TRUE)
+#epidermal <- RunPCA(epidermal, npcs = 30, verbose = TRUE)
+#epidermal <- RunUMAP(epidermal, reduction = "pca", dims = 1:30)
+#epidermal <- FindNeighbors(epidermal, reduction = "pca", dims = 1:30)
+
+#FindClusters(epidermal, resolution = 0.4) # 11
+#FindClusters(epidermal, resolution = 0.1) # 6
+#FindClusters(epidermal, resolution = 0.05) # 4
+#FindClusters(epidermal, resolution = 0.075) # 4
+#FindClusters(epidermal, resolution = 0.09) # 5
+
+#epidermal <- FindClusters(epidermal, resolution = 0.1)
+
+epidermal.p1 <- DimPlot(epidermal, reduction = "umap", group.by = "orig.ident")
+epidermal.p2 <- DimPlot(epidermal, reduction = "umap", label = TRUE, repel = TRUE)
+epidermal.p1 + epidermal.p2
+
+ggsave(filename = "01_Cluster1_DimPlot_Integration.png", bg = "white")
+
+DimPlot(epidermal, reduction = "umap", split.by = "orig.ident")
+ggsave(filename = "01_Cluster1_Split_DimPlot_Integration.png", bg = "white")
+
+
+
+epidermal_markers <- FindAllMarkers(object = epidermal, only.pos = TRUE, min.pct = 0.25, logfc.threshold = 0.25) #find markers for every cluster compared to all remaining cells, report only the positive ones
+head(all_markers)
+
+
+
+top3 <-
+  epidermal_markers %>%
+  group_by(cluster) %>%
+  slice_max(n = 3, order_by = avg_log2FC)
+top3
+
+DotPlot(object = epidermal, features = c(unique(top3$gene), "Igf1", "Igf1r"), cols = c("dodgerblue", "darkorange2", "red"), split.by = "orig.ident") +
+  theme(axis.text.x = element_text(angle = 90, hjust = 1, vjust = 0.5))
+
+ggsave(filename = "DotPlot_Top3Genes-SplitOrigIdent.png", bg = "white")
+
+
+################################################################################
+
+#TODO: Intergrate Ge dataset with Kasper Dataset to better label cluster
+  
+#data.Kasper <- LoadH5Seurat(file = "Adata-object_All.h5")
+
+#TODO: Run Cell Chat on Ge and Kasper Datasets
+
+#Run Cell Chat on Ge Dataset
+
+# devtools::install_github("sqjin/CellChat")
+
+# install.packages('NMF')
+
+# devtools::install_github("jokergoo/circlize")
+
+# devtools::install_github("jokergoo/ComplexHeatmap")
+
+library(CellChat)
+library(patchwork)
+options(stringsAsFactors = FALSE)
+
+
+devtools::install_github("cellgeni/sceasy")
+
+# Analysing Kasper 2023 Dataset
+
+Kasper.2023 <- readRDS(file = "/media/danielbishop/T7/scRNA/data/Kasper_Data/Kasper_2023.rds")
+
+Kasper.2023 # 19994 features across 32194 cells
+head(Kasper.2023)
+
+DimPlot(Kasper.2023, reduction = "umap", group.by = "subclustering_grouped", label = TRUE, repel = TRUE)
+ggsave(filename = "Kasper2023_Umap_AllData.png", bg = "white", scale=1.5)
+
+DimPlot(Kasper.2023, reduction = "umap", group.by = "embryonic_age", label = TRUE, repel = TRUE)
+ggsave(filename = "Kasper2023_Umap_Age.png", bg = "white", scale=1.5)
+
+# Removing E12.5 and E14.5 from Kasper data
+
+e13.kasper.2023 <- subset(Kasper.2023, subset = embryonic_age == "E13.5")
+e13.kasper.2023
+# 19994 features across 9964 cells
+head(e13.kasper.2023)
+
+# Removing E16.5 and P0 from Ge data
+
+DefaultAssay(data.combined) <- "RNA"
+
+e13.ge.2020 <- subset(data.combined, subset = orig.ident == "e13")
+e13.ge.2020
+# 26172 features across 27199 cells
+head(e13.ge.2020)
+
+rm(data.combined, Kasper.2023)
+gc()
+
+# Integrating Kasper and Ge datasets at E13.5
+
+e13.combined <- list(e13.kasper.2023, e13.ge.2020)
+e13.combined
+
+saveRDS(e13.combined, file = "e13_combined.rds")
+
+e13.combined <- readRDS(file = "e13_combined.rds")
+
+
+system.time(
+  e13.combined <- lapply(X = e13.combined, FUN = function(x) {
+    x <- NormalizeData(x)
+    x <- FindVariableFeatures(x, selection.method = "vst", nfeatures = 2000)
+  })
+)
+# 31.406
+
+features <- SelectIntegrationFeatures(object.list = e13.combined)
+
+system.time(
+  anchors <- FindIntegrationAnchors(object.list = e13.combined, anchor.features = features)
+)
+
+# Try this to see if it produces an error
+system.time(
+  anchors <- FindIntegrationAnchors(object.list = e13.combined, anchor.features = features, reduction = "rpca")
+)
+
+e13.combined <- IntegrateData(anchorset = anchors)
+
+# Modifying Kasper Data so that it Includes Raw Counts
+
+Kasper.2023 <- readRDS(file = "/media/danielbishop/T7/scRNA/data/Kasper_Data/Kasper_2023.rds")
+
+# Load counts for one sample (not storing as a variable here, just testing)
+test_counts <- read.delim(file = "/media/danielbishop/T7/scRNA/data/Kasper_Data/E-MTAB-11920/10X_17_033_12_counts.txt")
+test_counts[1:5, 1:5]
+test_counts <-
+  test_counts %>%
+  as_tibble(rownames = NA) %>%
+  rownames_to_column(var = "gene")
+test_counts
+test_counts %>% select(last_col())
+# Looks correct
+rm(test_counts)
+
+# Now load counts for all samples
+counts_files <- list.files(path = "../data/Kasper_Data/E-MTAB-11920", pattern = "*_counts.txt", full.names = TRUE)
+counts_files
+counts <-
+  lapply(counts_files, function(x){
+    read.delim(x) %>%
+      as_tibble(rownames = NA) %>%
+      rownames_to_column(var = "gene")
+    })
+class(counts)
+
+# Check the first one
+counts[[1]]
+
+# Combine counts for all samples into one tibble
+all_counts <- counts %>% reduce(full_join, by = "gene")
+all_counts
+dim(all_counts)
+# 27998 35601
+
+rm(counts, counts_files)
+gc()
+
+# Counts should be ready to go
+# Load cell type information
+Kasper.celltypes <- read_tsv(file = "/media/danielbishop/T7/scRNA/data/Kasper_Data/E-MTAB-11920/Filtered_Dataset_Inferred_Cell_Type.txt")
+Kasper.celltypes
+dim(Kasper.celltypes)
+# 32194 3
+
+# Meta data
+Kasper.meta <- read_tsv(file = "/media/danielbishop/T7/scRNA/data/Kasper_Data/E-MTAB-11920_metadata/E-MTAB-11920.sdrf.txt")
+Kasper.meta
+colnames(Kasper.meta)
+
+Kasper.meta <- 
+  Kasper.meta %>% select(5, 7, 12, 16) %>%
+  rename(individual = 1,
+         age = 2,
+         sex = 3,
+         ID = 4)
+
+
+# Check that all cells in the celltypes object are present in the counts object
+summary(Kasper.celltypes$Cell_Barcode %in% colnames(all_counts))
+
+# Limit the counts to contain only those (filtered) cells in the the celltypes object
+all_counts <-
+  all_counts %>%
+  select(c("gene", Kasper.celltypes$Cell_Barcode))
+all_counts
+dim(all_counts)
+# 27998 32195
+
+
+# Limit the counts to contain only the genes used in the paper
+# Genes live here
+Kasper.2023@assays$RNA@counts@Dimnames[[1]]
+
+all_counts <-
+  all_counts %>%
+  filter(gene %in% Kasper.2023@assays$RNA@counts@Dimnames[[1]])
+all_counts
+dim(all_counts)
+# 19797 32195
+
+Kasper.celltypes
+
+gc()
+
+# Make a Seurat object from raw counts, then add metadata from the published Seurat file
+Kasper.seurat <- CreateSeuratObject(counts = all_counts %>%
+                                    column_to_rownames(var = "gene"),
+                                    project = "Kasper")
+
+Kasper.seurat
+Kasper.seurat@meta.data %>% head()
+
+Kasper.2023
+# Same number of cells in each Seurat object
+# Different number of genes
+# Three objectives:
+# - bring metadata from Kasper.2023 to Kasper.seurat
+# - restrict genes in Kasper.seurat to those found in Kasper.2023
+# - ensure nCount_RNA is accurate
+
+# 1. metadata
+
+Kasper.seurat@meta.data <-
+  Kasper.seurat@meta.data %>%
+  as_tibble(rownames = NA) %>%
+  rownames_to_column(var = "barcode") %>%
+  left_join(y = Kasper.2023@meta.data %>%
+              as_tibble(rownames = NA) %>%
+              rownames_to_column(var = "barcode") %>%
+              select(barcode, sample_id, embryonic_age, perc_mito, sample_date, sex, S.Score, G2M.Score, Phase, G1.Score, samples_named, subclustering, subclustering_grouped),
+            by = "barcode") %>%
+  column_to_rownames(var = "barcode")
+
+
+rm(all_counts, Kasper.celltypes, Kasper.meta)
+gc()
+
+SaveH5Seurat(object = Kasper.seurat, 
+             filename = "Kasper.seurat",
+             overwrite = TRUE)
+
+Kasper.seurat <- LoadH5Seurat(file = "Kasper.seurat.h5seurat")
+
+# Preprocess raw counts
+
+Kasper.seurat <- NormalizeData(Kasper.seurat, normalization.method = "LogNormalize", scale.factor = 10000)
+
+Kasper.seurat <- FindVariableFeatures(Kasper.seurat, selection.method = "vst", nfeatures = 2000)
+
+top10 <- head(VariableFeatures(Kasper.seurat), 10)
+top10
+
+SaveH5Seurat(object = Kasper.seurat, 
+             filename = "Kasper.seurat.normalized",
+             overwrite = TRUE)
+
+
+Kasper.seurat.normalized <- LoadH5Seurat(file = "Kasper.seurat.normalized.h5seurat")
+
+
+plot1 <- VariableFeaturePlot(Kasper.seurat)
+plot2 <- LabelPoints(plot = plot1, points = top10, repel = TRUE)
+plot1 + plot2
+
+# Unsure as to whether to run the following command on Kasper.seurat or Kasper.seurat.normalized,
+# therefore it was run on both
+
+# Raw Data
+# all.genes <- rownames(Kasper.seurat)
+# Kasper.seurat.scaledata <- ScaleData(Kasper.seurat, features = all.genes, vars.to.regress = c("sample_date", "sex", "perc_mito", "S.Score", "G2M.Score", "nCount_RNA"))
+
+# SaveH5Seurat(object = Kasper.seurat.scaledata, 
+#             filename = "Kasper.seurat.scaledata",
+#             overwrite = TRUE)
+
+# Normalzsed Data - This is the correct one
+all.genes.normalized <- rownames(Kasper.seurat.normalized)
+Kasper.seurat.normalized.scaledata <- ScaleData(Kasper.seurat, features = all.genes, vars.to.regress = c("sample_date", "sex", "perc_mito", "S.Score", "G2M.Score", "nCount_RNA"))
+
+SaveH5Seurat(object = Kasper.seurat.normalized.scaledata, 
+             filename = "Kasper.seurat.normalized.scaledata",
+             overwrite = TRUE)
+
+
+Kasper.scaledata <- LoadH5Seurat(file = "Kasper.seurat.normalized.scaledata.h5seurat")
+head(Kasper.scaledata)
+
+#Comparing to previous dataset
+Kasper.seurat <- LoadH5Seurat(file = "Kasper.seurat.h5seurat")
+head(Kasper.seurat)
+
+##########################################
+#Check perfroemed by Nick
+
+Kasper.seurat@assays$RNA@counts[1:10, 1:10]
+Kasper.seurat@assays$RNA@data[1:10, 1:10]
+Kasper.seurat@assays$RNA@scale.data[1:10, 1:10]
+
+Kasper.scaledata@assays$RNA@counts[1:10, 1:10]
+Kasper.scaledata@assays$RNA@data[1:10, 1:10]
+Kasper.scaledata@assays$RNA@scale.data[1:10, 1:10]
+
+
+############################################
+
+
+Kasper.scaledata <- RunPCA(Kasper.scaledata, features = VariableFeatures(object = Kasper.seurat))
+
+DimHeatmap(Kasper.scaledata, dims = 1, cells = 500, balanced = TRUE)
+ElbowPlot(Kasper.scaledata)
+
+Kasper.scaledata <- FindNeighbors(Kasper.scaledata, dims = 1:10)
+Kasper.scaledata <- FindClusters(Kasper.scaledata, resolution = 0.75)
+
+Kasper.scaledata <- RunUMAP(Kasper.scaledata, dims = 1:10)
+
+DimPlot(Kasper.scaledata, reduction = "umap", group.by = "subclustering_grouped", label = TRUE)
+
+DimPlot(Kasper.scaledata, reduction = "umap", split.by = "embryonic_age", group.by = "embryonic_age")
+
+
+SaveH5Seurat(object = Kasper.scaledata, 
+             filename = "Kasper.scaledata",
+             overwrite = TRUE)
+
+
+#Subsetting the E12.5 and E14.5 data from Kasper, 2023
+
+Kasper.scaledata <- LoadH5Seurat(file = "Kasper.scaledata.h5seurat")
+
+e13.kasper.2023 <- subset(Kasper.scaledata, subset = embryonic_age == "E13.5")
+e13.kasper.2023
+# 19797 features across 9964 cells
+head(e13.kasper.2023)
+
+rm(Kasper.scaledata, Kasper.seurat)
+gc()
+
+DimPlot(e13.kasper.2023, reduction = "umap", group.by = "subclustering_grouped", label = TRUE)
+
+#Subsetting the E16.5 and P0 data from Ge, 2020
+
+data.filtered <- LoadH5Seurat(file = "filtered_data.h5Seurat")
+data.filtered
+# 24172 features across 40496 cells
+
+e13.ge.2020 <- subset(data.filtered, subset = orig.ident == "e13")
+e13.ge.2020
+# 24172 features across 27199 cells
+head(e13.ge.2020)
+
+rm(data.filtered)
+gc()
+
+#Combining E13.5 datasets in preparation for integration
+
+e13.combined <- list(e13.kasper.2023, e13.ge.2020)
+e13.combined
+
+saveRDS(e13.combined, file = "e13_combined.rds")
+
+e13.combined <- readRDS(file = "e13_combined.rds")
+
+
+e13.combined <- lapply(X = e13.combined, FUN = function(x) {
+    x <- NormalizeData(x)
+    x <- FindVariableFeatures(x, selection.method = "vst", nfeatures = 2000)
+  })
+
+features <- SelectIntegrationFeatures(object.list = e13.combined)
+
+anchors <- FindIntegrationAnchors(object.list = e13.combined, anchor.features = features)
+
+e13.combined <- IntegrateData(anchorset = anchors)
+
+SaveH5Seurat(object = e13.combined, 
+             filename = "e13.combined",
+             overwrite = TRUE)
+
+e13.combined <- LoadH5Seurat(file = "e13.combined.h5Seurat")
+e13.combined
+# 27679 features across 37163 cells
+
+# Creating UMAP of e13.combined
+
+DefaultAssay(e13.combined) <- "integrated"
+
+e13.combined <- ScaleData(e13.combined, verbose = FALSE)
+e13.combined <- RunPCA(e13.combined, npcs = 30, verbose = FALSE)
+e13.combined <- RunUMAP(e13.combined, reduction = "pca", dims = 1:30)
+e13.combined <- FindNeighbors(e13.combined, reduction = "pca", dims = 1:30)
+e13.combined <- FindClusters(e13.combined, resolution = 0.4)
+
+p1 <- DimPlot(e13.combined, reduction = "umap", split.by = "orig.ident")
+p2 <- DimPlot(e13.combined, reduction = "umap", label = TRUE, repel = TRUE)
+p1 + p2
+ggsave(filename = "e13_KasperGeUMAP.png", bg = "white", scale=1.5)
+
+
+DimPlot(e13.combined, reduction = "umap", split.by = "orig.ident", group.by = "subclustering_grouped")
+ggsave(filename = "e13_KasperGeUMAP_Subcluster.png", bg = "white", scale=1.5)
+
+#Distribution of Fibroblast Markers on Integrated Data
+FeaturePlot(e13.combined, features = "Pdgfrb", split.by = "orig.ident", cols = c("white", "black"))
+ggsave(filename = "e13_KasperGe_Pdgfrb.png", bg = "white", scale=1.5)
+
+FeaturePlot(e13.combined, features = "Krt5", split.by = "orig.ident", cols = c("white", "black"))
+
+###########################################################################################
+# Analysing Kasper 2023 Dataset
+Kasper.seurat <- LoadH5Seurat(file = "Kasper.seurat.h5Seurat")
+Kasper.seurat@meta.data %>% head()
+
+
+Kasper.seurat # 27998 features across 32194 cells
+head(Kasper.seurat)
+
+DimPlot(Kasper.seurat, reduction = "umap", group.by = "Inferred_Cell_Type", label = TRUE, repel = TRUE)
+#!ggsave(filename = "Kasper2023_Umap_AllData.png", bg = "white", scale=1.5)
+
+###########################################################################################
+# Preparing Figures for QS Presentation
+
+# Loading E13.5 Kasper Dataset
+Kasper.scaledata <- LoadH5Seurat(file = "Kasper.scaledata.h5seurat")
+e13.kasper.2023 <- subset(Kasper.scaledata, subset = embryonic_age == "E13.5")
+rm(Kasper.scaledata, Kasper.seurat)
+gc()
+
+# Loading E13.5 Ge Dataset
+data.filtered <- LoadH5Seurat(file = "filtered_data.h5Seurat")
+e13.ge.2020 <- subset(data.filtered, subset = orig.ident == "e13")
+rm(data.filtered)
+gc()
+
+# Making TSNE Plots and Feature Plots of IGF1 Pathway in Kasper 2023
+
+DimPlot(e13.kasper.2023, reduction = "umap", group.by = "subclustering_grouped", label = TRUE, label.size = 3, repel = TRUE)
+ggsave(filename = "QSe13_KasperTSNE.png", bg = "white", scale=1.5)
+
+#Igf1
+FeaturePlot(e13.kasper.2023, features = "Igf1", min.cutoff = 0, max.cutoff = 5, cols = c("gray88", "navy"))
+ggsave(filename = "QSe13_KasperFeature_Igf1_max.cutoff5.png", bg = "white", scale=1.5)
+
+FeaturePlot(e13.kasper.2023, features = "Igf1", min.cutoff = 0, max.cutoff = 60, cols = c("gray88", "navy"))
+ggsave(filename = "QSe13_KasperFeature_Igf1_max.cutoff60.png", bg = "white", scale=1.5)            
+
+# Same Plot but max.cutoff is changed, need to confirm the exact scale of a feature plot but my interpretation is that the maximum
+# increase is so significantly higher than all other changes that it becomes very difficult to interpret. At max.cutoff = 5 I lose
+# some of the information at the extreme end but can better visualise smaller changes in expression. For now I will carry on with
+# modifying the max.cutoff but will need to confer with NW that this is ok
+#       
+
+#Igf1r
+FeaturePlot(e13.kasper.2023, features = "Igf1r", min.cutoff = 0, max.cutoff = 20, cols = c("gray88", "navy"))
+ggsave(filename = "QSe13_KasperFeature_Igf1r_max.cutoff20.png", bg = "white", scale=1.5)
+
+FeaturePlot(e13.kasper.2023, features = "Igf1r", min.cutoff = 0, max.cutoff = 5, cols = c("gray88", "navy"))
+ggsave(filename = "QSe13_KasperFeature_Igf1r_max.cutoff5.png", bg = "white", scale=1.5)
+
+#Igf2
+FeaturePlot(e13.kasper.2023, features = "Igf2", min.cutoff = 0, cols = c("gray88", "navy"))
+ggsave(filename = "QSe13_KasperFeature_Igf2_max.cutoffNA.png", bg = "white", scale=1.5)
+
+FeaturePlot(e13.kasper.2023, features = "Igf2", min.cutoff = 0, max.cutoff = 40, cols = c("gray88", "navy"))
+ggsave(filename = "QSe13_KasperFeature_Igf2_max.cutoff40.png", bg = "white", scale=1.5)
+
+#Igf2r
+FeaturePlot(e13.kasper.2023, features = "Igf2r", min.cutoff = 0, cols = c("gray88", "navy"))
+ggsave(filename = "QSe13_KasperFeature_Igf2r_max.cutoffNA.png", bg = "white", scale=1.5)
+
+FeaturePlot(e13.kasper.2023, features = "Igf2r", min.cutoff = 0, max.cutoff = 8, cols = c("gray88", "navy"))
+ggsave(filename = "QSe13_KasperFeature_Igf2r_max.cutoff8.png", bg = "white", scale=1.5)
+
+#Insr
+FeaturePlot(e13.kasper.2023, features = "Insr", min.cutoff = 0, cols = c("gray88", "navy"))
+ggsave(filename = "QSe13_KasperFeature_Insr_max.cutoffNA.png", bg = "white", scale=1.5)
+
+FeaturePlot(e13.kasper.2023, features = "Insr", min.cutoff = 0, max.cutoff = 3, cols = c("gray88", "navy"))
+ggsave(filename = "QSe13_KasperFeature_Insr_max.cutoff3.png", bg = "white", scale=1.5)
+
+#Runx2
+FeaturePlot(e13.kasper.2023, features = "Runx2", min.cutoff = 0, cols = c("gray88", "navy"))
+ggsave(filename = "QSe13_KasperFeature_Runx2_max.cutoffNA.png", bg = "white", scale=1.5)
+
+FeaturePlot(e13.kasper.2023, features = "Runx2", min.cutoff = 0, max.cutoff = 3, cols = c("gray88", "navy"))
+ggsave(filename = "QSe13_KasperFeature_Runx2_max.cutoff3.png", bg = "white", scale=1.5)
+
+#Igfbp
+FeaturePlot(e13.kasper.2023, features = c("Igfbp1", "Igfbp2", "Igfbp4", "Igfbp5", "Igfbp6"), min.cutoff = 0, cols = c("gray88", "navy"))
+ggsave(filename = "QSe13_KasperFeature_Igfbp_max.cutoffNA.png", bg = "white", scale=1.5)
+
+# Attempting to Isolate Basal Cells
+
+e13.kasper.2023.basal <- subset(e13.kasper.2023, subset = subclustering_grouped == "EPI Basal1-4")
+e13.kasper.2023.basal
+# 19797 features across 131 samples
+head(e13.kasper.2023.basal)
+
+DimPlot(e13.kasper.2023.basal, reduction = "umap")
+
+FeaturePlot(e13.kasper.2023.basal, features = "Igf1r", cols = c("gray88", "navy"))
+ggsave(filename = "QSe13_KasperFeature_Basal_Igf1r.png", bg = "white", scale=1.5)
+
+# Isolating BECs
+e13.kasper.2023.BEC <- subset(e13.kasper.2023, subset = subclustering_grouped == "VESSEL BECs")
+e13.kasper.2023.BEC
+# 19797 features across 168 samples
+head(e13.kasper.2023.BEC)
+
+DimPlot(e13.kasper.2023.BEC, reduction = "umap")
+
+FeaturePlot(e13.kasper.2023.BEC, features = "Igf1", cols = c("gray88", "navy"))
+ggsave(filename = "QSe13_KasperFeature_BEC_Igf1.png", bg = "white", scale=1.5)
+
+# Isolating LECs
+e13.kasper.2023.LEC <- subset(e13.kasper.2023, subset = subclustering_grouped == "VESSEL LECs")
+e13.kasper.2023.LEC
+# 19797 features across 24 samples
+head(e13.kasper.2023.LEC)
+
+DimPlot(e13.kasper.2023.LEC, reduction = "umap")
+
+FeaturePlot(e13.kasper.2023.LEC, features = "Igf1", cols = c("gray88", "navy"))
+ggsave(filename = "QSe13_KasperFeature_LEC_Igf1.png", bg = "white", scale=1.5)
+
+FeaturePlot(e13.kasper.2023.LEC, features = "Igf1", min.cutoff = 0, max.cutoff = 5, cols = c("gray88", "navy"))
+
+#Test
+DimPlot(e13.kasper.2023, reduction = "umap", label = TRUE)
+ggsave(filename = "QSe13_KasperTSNE_GroupbyVariableFeature.png", bg = "white", scale=1.5)
+
+#######################################################################################################################
+#Install Cell Chat for RStudio
+
+devtools::install_github("sqjin/CellChat")
+
+install.packages('NMF')
+
+devtools::install_github("jokergoo/circlize")
+
+devtools::install_github("jokergoo/ComplexHeatmap")
+
+library(CellChat)
+library(patchwork)
+options(stringsAsFactors = FALSE)
+
+cellchat <- createCellChat(e13.kasper.2023, group.by = "subclustering_grouped")
+cellchat
+
+CellChatDB <- CellChatDB.mouse
+
+# showDatabaseCategory(CellChatDB) # Database of documented cell signalling types
+# dplyr::glimpse(CellChatDB$interaction) # Structure of database
+
+# CellChatDB.use <- subsetDB(CellChatDB, search = "Secreted Signaling") # Can be used to set a specific type of signalling
+CellChatDB.use <- CellChatDB # Analyse with all types of signalling
+cellchat@DB <- CellChatDB.use
+
+cellchat <- subsetData(cellchat)
+future::plan("multisession", workers = 4)
+
+cellchat <- identifyOverExpressedGenes(cellchat)
+cellchat <- identifyOverExpressedInteractions(cellchat)
+
+# cellchat <- computeCommunProb(cellchat) # Error occurred, try suggested fix
+
+# unique(cellchat@idents)
+
+# cellchat_test <- cellchat
+# unique(cellchat_test@idents)
+# levels(cellchat_test@idents)
+# setdiff(levels(cellchat_test@idents),unique(cellchat_test@idents))
+
+# cellchat_test@idents <- droplevels(cellchat_test@idents,exclude = setdiff(levels(cellchat_test@idents),unique(cellchat_test@idents)))
+# levels(cellchat_test@idents)
+# Had to identify the idents that were lost when subsetting E13.5 data and remove them from the object
+
+cellchat@idents <- droplevels(cellchat@idents,exclude = setdiff(levels(cellchat@idents),unique(cellchat@idents)))
+
+cellchat <- computeCommunProb(cellchat)
+
+saveRDS(cellchat, file = "cellchat.rds")
+cellchat <- readRDS(file = "cellchat.rds") #!!!!!!!!!!!!!!!!!
+
+cellchat <- filterCommunication(cellchat, min.cells = 10)
+
+df.net <- subsetCommunication(cellchat)
+df.net
+
+saveRDS(df.net, file = "Kasper.cellchat.dataframe.rds")
+write.csv(df.net, file = "Kasper.cellchat.dataframe.csv")
+
+cellchat <- computeCommunProbPathway(cellchat)
+
+cellchat <- aggregateNet(cellchat)
+# can use sources.use and targets.use to narrow signalling down to desired cell types
+ 
+
+groupSize <- as.numeric(table(cellchat@idents))
+par(mfrow = c(1,2), xpd=TRUE)
+netVisual_circle(cellchat@net$count, vertex.weight = groupSize, weight.scale = T, label.edge= F, title.name = "Number of interactions")
+netVisual_circle(cellchat@net$weight, vertex.weight = groupSize, weight.scale = T, label.edge= F, title.name = "Interaction weights/strength")
+
+
+mat <- cellchat@net$weight
+par(mfrow = c(3,4), xpd=TRUE)
+for (i in 1:nrow(mat)) {
+  mat2 <- matrix(0, nrow = nrow(mat), ncol = ncol(mat), dimnames = dimnames(mat))
+  mat2[i, ] <- mat[i, ]
+  netVisual_circle(mat2, vertex.weight = groupSize, weight.scale = T, edge.weight.max = max(mat), title.name = rownames(mat)[i])
+}
+
+pathways.show <- c("IGF") 
+# pathways.show <- c("CXCL") 
+#levels(cellchat@idents)
+vertex.receiver = c(22, 23)
+netVisual_aggregate(cellchat, signaling = pathways.show,  vertex.receiver = vertex.receiver, layout = "hierarchy")
+
+#svglite::svglite(filename = "Cellchat.Kasper.IgfHierarchyPlot2.svg", width = 120, height = 80, fix_text_size = FALSE)
+#netVisual_aggregate(cellchat, signaling = pathways.show,  vertex.receiver = vertex.receiver, layout = "hierarchy")
+#dev.off()
+
+
+
+par(mfrow=c(1,1))
+netVisual_aggregate(cellchat, signaling = pathways.show, layout = "circle", top = 0.2)
+ggsave(filename = "Cellchat.Kasper.IgfCirclePlotTop20pc.svg")
+
+par(mfrow=c(1,1))
+netVisual_aggregate(cellchat, signaling = pathways.show, layout = "chord")
+
+#png(filename = "Cellchat.Kasper.IgfHeatmap.png", width = 800, height = 480)
+par(mfrow=c(1,1))
+netVisual_heatmap(cellchat, signaling = pathways.show, color.heatmap = "Reds")
+#dev.off()
+
+####################################
+?svglite::svglite
+svglite::svglite(filename = "Cellchat.Kasper.IgfHeatmap.svg", width = 12, height = 8, fix_text_size = FALSE)
+# par(mfrow=c(1,1))
+netVisual_heatmap(cellchat, signaling = pathways.show, color.heatmap = "Reds")
+dev.off()
+####################################
+
+netAnalysis_contribution(cellchat, signaling = pathways.show) 
+ggsave(filename = "Cellchat.Kasper.IgfContributionPlot.png")
+
+pairLR.IGF <- extractEnrichedLR(cellchat, signaling = pathways.show, geneLR.return = FALSE) 
+LR.show <- pairLR.IGF[1,]
+# Hierarchy Plot
+vertex.receiver = seq(22,23) # a numeric vector 
+netVisual_individual(cellchat, signaling = pathways.show,  pairLR.use = LR.show, vertex.receiver = vertex.receiver, layout = "hierarchy")
+#Rightclick and saved as Cellchat.Kasper.Igf1_Igf1rHierarchyPlot.png
+
+
+# Circle plot
+netVisual_individual(cellchat, signaling = pathways.show, pairLR.use = LR.show, layout = "circle")
+#Rightclick and saved as Cellchat.Kasper.Igf1_Igf1rCirclePlot.png
+
+# Chord diagram
+netVisual_individual(cellchat, signaling = pathways.show, pairLR.use = LR.show, layout = "chord")
+
+netVisual_bubble(cellchat, sources.use = 4, targets.use = c(5:11), remove.isolate = FALSE)
+
+netVisual_bubble(cellchat, sources.use = 22, targets.use = c(1:24), signaling = "IGF", remove.isolate = FALSE)
+ggsave(filename = "Cellchat.Kasper.VesselBEC.IgfBubblePlot.png")
+
+netVisual_bubble(cellchat, sources.use = 23, targets.use = c(1:24), signaling = "IGF", remove.isolate = FALSE)
+ggsave(filename = "Cellchat.Kasper.VesselLEC.IgfBubblePlot.png")
+
+netVisual_bubble(cellchat, sources.use = 1:24, targets.use = c(2), signaling = "IGF", remove.isolate = FALSE)
+ggsave(filename = "Cellchat.Kasper.EpidermisTarget.IgfBubblePlot.png")
+
+netVisual_bubble(cellchat, sources.use = 1:24, targets.use = c(22), signaling = "IGF", remove.isolate = FALSE)
+ggsave(filename = "Cellchat.Kasper.VesselBECTarget.IgfBubblePlot.png")
+
+netVisual_bubble(cellchat, sources.use = 1:24, targets.use = c(23), signaling = "IGF", remove.isolate = FALSE)
+ggsave(filename = "Cellchat.Kasper.VesselLECTarget.IgfBubblePlot.png")
+
+pairLR.use <- extractEnrichedLR(cellchat, signaling = "IGF")
+netVisual_bubble(cellchat, sources.use = c(22, 23), targets.use = c(1:24), pairLR.use = pairLR.use, remove.isolate = TRUE)
+
+
+netVisual_chord_gene(cellchat, sources.use = 22,23, targets.use = c(2,22,23), lab.cex = 0.5,legend.pos.y = 30)
+#Honestly have no idea how a chord plot works
+netVisual_chord_gene(cellchat, sources.use = c(22,23), targets.use = 2, legend.pos.x = 15)
+
+
+netVisual_chord_gene(cellchat, sources.use = c(22,23), targets.use = c(2, 4, 8, 9, 10, 12, 13, 15, 22, 23), signaling = "IGF",legend.pos.x = 8)  
+#righclick save as  Cellchat.Kasper.VESSELBECandLEC.IgfChordPlot.png
+
+netVisual_chord_gene(cellchat, sources.use = c(2, 4, 8, 9, 10, 12, 13, 15, 22, 23), targets.use = 2, signaling = "IGF",legend.pos.x = 8)  
+#righclick save as Cellchat.Kasper.Epidermis.IgfChordPlot.png
+
+netVisual_chord_gene(cellchat, sources.use = c(22,23), targets.use = 2, slot.name = "netP", legend.pos.x = 10)
+#Rightclick save as Cellchat.Kasper.AngiocrineChordPlot.png
+
+plotGeneExpression(cellchat, signaling = "IGF")
+ggsave(filename = "Cellchat.Kasper.Violoin Plot.png")
+ggsave(filename = "Cellchat.Kasper.Violoin Plot.svg")
+
+plotGeneExpression(cellchat, signaling = "IGF", enriched.only = FALSE)
+
+cellchat <- netAnalysis_computeCentrality(cellchat, slot.name = "netP") # the slot 'netP' means the inferred intercellular communication network of signaling pathways
+netAnalysis_signalingRole_network(cellchat, signaling = pathways.show, width = 16, height = 5, font.size = 9)
+#Rightclick save as Cellchat.Kasper.Network_Centrality.png
+
+gg1 <- netAnalysis_signalingRole_scatter(cellchat)
+gg1 <- gg1 + labs(title = "All Signalling")
+gg2 <- netAnalysis_signalingRole_scatter(cellchat, signaling = "IGF")
+gg2 <- gg2 + labs(title = "Igf Signalling")
+gg1 + gg2
+ggsave(filename = "Cellchat.Kasper.VisualiseSenders.svg")
+
+
+ht1 <- netAnalysis_signalingRole_heatmap(cellchat, pattern = "outgoing", height = 20, font.size = 6)
+ht2 <- netAnalysis_signalingRole_heatmap(cellchat, pattern = "incoming", height = 20, font.size = 6)
+
+svglite::svglite(filename = "Cellchat.Kasper.SignallingPatternHeatmap.svg", width = 12, height = 12, fix_text_size = FALSE)
+ht1 + ht2
+dev.off()
+
+ht <- netAnalysis_signalingRole_heatmap(cellchat, pattern = "outgoing", signaling = "IGF", height = 1)
+hti <- netAnalysis_signalingRole_heatmap(cellchat, pattern = "incoming", signaling = "IGF", height = 1)
+
+svglite::svglite(filename = "Cellchat.Kasper.PatternHeatmap.svg", width = 12, height = 12, fix_text_size = FALSE)
+ht + hti
+dev.off()
+
+library(NMF)
+install.packages("ggalluvial")
+library(ggalluvial)
+
+install.packages("pkgmaker")
+library(pkgmaker)
+library(registry)
+library(rngtools)
+library(cluster)
+
+selectK(cellchat, pattern = "outgoing")
+ggsave(filename = "Cellchat.Kasper.OutgoingSignalling.svg")
+
+nPatterns = 3
+cellchat <- identifyCommunicationPatterns(cellchat, pattern = "outgoing", k = nPatterns, font.size = 4, height = 10, width = 10)
+
+netAnalysis_river(cellchat, pattern = "outgoing",  font.size = 2.5)
+ggsave(filename = "Cellchat.Kasper.OutgoingRiverPlot.svg", width = 8, height = 10)
+
+netAnalysis_dot(cellchat, pattern = "outgoing", font.size = 7)
+ggsave(filename = "Cellchat.Kasper.OutgoingRiverPlot.png", scale = 1.5)
+
+
+selectK(cellchat, pattern = "incoming")
+ggsave(filename = "Cellchat.Kasper.Signalling.svg")
+
+nPatterns = 4
+cellchat <- identifyCommunicationPatterns(cellchat, pattern = "incoming", k = nPatterns)
+
+netAnalysis_river(cellchat, pattern = "incoming", font.size = 2.5)
+ggsave(filename = "Cellchat.Kasper.IncomingRiverPlot.svg", width = 8, height = 10)
+
+netAnalysis_dot(cellchat, pattern = "incoming", font.size = 7)
+ggsave(filename = "Cellchat.Kasper.IncomingRiverPlot.png", scale = 1.5)
+
+
+saveRDS(cellchat, file = "cellchat2.rds")
+cellchat <- readRDS(file = "cellchat2.rds")
+
+cellchat <- computeNetSimilarity(cellchat, type = "functional")
+
+#reticulate::py_install(packages = 'umap-learn')
+
+cellchat <- netEmbedding(cellchat, type = "functional")
+
+cellchat <- netClustering(cellchat, type = "functional", do.parallel = FALSE)
+netVisual_embedding(cellchat, type = "functional", label.size = 3.5)
+ggsave(filename = "Cellchat.Kasper.FunctionalSimilarity.svg")
+
+cellchat <- computeNetSimilarity(cellchat, type = "structural")
+cellchat <- netEmbedding(cellchat, type = "structural")
+cellchat <- netClustering(cellchat, type = "structural", do.parallel = FALSE)
+netVisual_embedding(cellchat, type = "structural", label.size = 3.5)
+ggsave(filename = "Cellchat.Kasper.StructuralSimilarity.svg")
+
+netVisual_embeddingZoomIn(cellchat, type = "structural", nCol = 2)
+ggsave(filename = "Cellchat.Kasper.StructuralSimilarity2.svg")
+
+saveRDS(cellchat.finished, file = "cellchatfinished.rds")
+
+
+
+#pathways.show.all <- cellchat@netP$pathways
+# check the order of cell identity to set suitable vertex.receiver
+#levels(cellchat@idents)
+#vertex.receiver = seq(22,23)
+#for (i in 1:length(pathways.show.all)) {
+  # Visualize communication network associated with both signaling pathway and individual L-R pairs
+#  netVisual(cellchat, signaling = pathways.show.all[i], vertex.receiver = vertex.receiver, layout = "hierarchy")
+  # Compute and visualize the contribution of each ligand-receptor pair to the overall signaling pathway
+#  gg <- netAnalysis_contribution(cellchat, signaling = pathways.show.all[i])
+#  ggsave(filename=paste0(pathways.show.all[i], "Cellchat.Kasper_L-R_contribution.pdf"), plot=gg, width = 3, height = 2, units = 'in', dpi = 300) 
+#}
+
+
+
+# par(mfrow=c(1,1))
+# netVisual_aggregate(object = cellchat, 
+#                    signaling = pathways.show,
+#                    vertex.receiver = vertex.receiver,
+                    # sources.use = c("Epi Basal1-4", "EPI Diff", "FIB Deep1-3",
+                    #                 "FIB Inter1-3", "FIB Lower", "FIB Origin1-6",
+                    #                 "FIB Upper1-4", "IMMU Macrophages", "VESSEL BECs",
+                    #                 "VESSEL LECs"),
+#                    layout = "hierarchy")
+
+# netVisual_aggregate(cellchat, signaling = pathways.show, targets.use = c(2, 4, 8, 9, 10, 12, 13, 15, 22, 23), layout = "hierarchy")
+
+
+#cellchat_test <- readRDS(file = "cellchat.rds")
+#cellchat_test <- filterCommunication(cellchat_test, min.cells = 10)
+
+#df.net_test <- subsetCommunication(cellchat_test)
+#df.net_test
+
+#cellchat_test <- computeCommunProbPathway(cellchat_test)
+
+#cellchat.subset <- aggregateNet(cellchat_test,
+#                 targets.use = c("Epi Basal1-4", "EPI Diff", "FIB Deep1-3",
+#                "FIB Inter1-3", "FIB Lower", "FIB Origin1-6",
+#                 "FIB Upper1-4", "IMMU Macrophages", "VESSEL BECs",
+#                 "VESSEL LECs"))
+
+#groupSize <- as.numeric(table(cellchat.subset@idents))
+# par(mfrow = c(1,2), xpd=TRUE)
+# netVisual_circle(cellchat.subset@net$count, vertex.weight = groupSize, weight.scale = T, label.edge= F, title.name = "Number of interactions")
+# netVisual_circle(cellchat.subset@net$weight, vertex.weight = groupSize, weight.scale = T, label.edge= F, title.name = "Interaction weights/strength")                         
+
+# pathways.show <- c("IGF")
+# vertex.receiver = c(22, 23)
+# netVisual_aggregate(cellchat.subset, signaling = pathways.show,  vertex.receiver = vertex.receiver, layout = "hierarchy")
+ 
+# par(mfrow=c(1,1))
+# netVisual_aggregate(cellchat.subset, signaling = pathways.show, layout = "circle", top = 0.2)
+ 
+
+
+
+###########################################################################
+# Using SingleR to Annotate Cell Types
+
+data.filtered <- LoadH5Seurat(file = "filtered_data.h5Seurat")
+data.filtered
+# 24172 features across 40496 cells
+
+if (!require("BiocManager", quietly = TRUE))
+  install.packages("BiocManager")
+
+BiocManager::install("SummarizedExperiment")
+
+
+if (!require("BiocManager", quietly = TRUE))
+  install.packages("BiocManager")
+
+BiocManager::install("celldex")
+
+Ge.SummarizedExperiment <- dataset_seurat(
+  data.filtered,
+  count_assay = "RNA",
+  cell_id_col = ,
+  cell_type_col,
+  tpm_assay = NULL,
+  name = "SimBu_dataset",
+  spike_in_col = NULL,
+  additional_cols = NULL,
+  filter_genes = TRUE,
+  variance_cutoff = 0,
+  type_abundance_cutoff = 0,
+  scale_tpm = TRUE
+)
+
+# Attempting to Use Seurat FindTransferAnchors Function to Label Ge Data with the Kasper Labels
+
+# Loading E13.5 Kasper Dataset
+Kasper.scaledata <- LoadH5Seurat(file = "Kasper.scaledata.h5seurat")
+e13.kasper.2023 <- subset(Kasper.scaledata, subset = embryonic_age == "E13.5")
+rm(Kasper.scaledata, Kasper.seurat)
+gc()
+
+# Loading E13.5 Ge Dataset
+data.filtered <- LoadH5Seurat(file = "filtered_data.h5Seurat")
+e13.ge.2020 <- subset(data.filtered, subset = orig.ident == "e13")
+rm(data.filtered)
+gc()
+
+# Attempt to Transfer Labels
+library(SeuratData)
+
+# for demonstration, split the object into reference and query
+data.reference <- e13.kasper.2023
+data.query <- e13.ge.2020
+
+# perform standard preprocessing on each object
+data.reference <- NormalizeData(data.reference)
+data.reference <- FindVariableFeatures(data.reference)
+data.reference <- ScaleData(data.reference)
+
+data.query <- NormalizeData(data.query)
+data.query <- FindVariableFeatures(data.query)
+data.query <- ScaleData(data.query)
+
+# find anchors
+anchors <- FindTransferAnchors(reference = data.reference, query = data.query)
+
+# transfer labels
+predictions <- TransferData(
+  anchorset = anchors,
+  refdata = data.reference$subclustering_grouped
+)
+data.query <- AddMetaData(object = data.query, metadata = predictions)
+
+e13.ge.2020.labels <- data.query
+
+
+DefaultAssay(e13.ge.2020.labels) <- "RNA"
+
+e13.ge.2020.labels <- ScaleData(e13.ge.2020.labels, verbose = FALSE)
+e13.ge.2020.labels <- RunPCA(e13.ge.2020.labels, npcs = 30, verbose = FALSE)
+e13.ge.2020.labels <- RunUMAP(e13.ge.2020.labels, reduction = "pca", dims = 1:30)
+e13.ge.2020.labels <- FindNeighbors(e13.ge.2020.labels, reduction = "pca", dims = 1:30)
+e13.ge.2020.labels <- FindClusters(e13.ge.2020.labels, resolution = 0.35)
+
+p1 <- DimPlot(e13.ge.2020.labels, reduction = "umap")
+p2 <- DimPlot(e13.ge.2020.labels, reduction = "umap", label = TRUE, repel = TRUE)
+p1 + p2
+ggsave(filename = ".png", bg = "white", scale=1.5)
+
+FeaturePlot(e13.ge.2020.labels, features = "prediction.score.max")
+
+e13.ge.2020.labels@meta.data %>%
+  ggplot(aes(x = prediction.score.max)) +
+  geom_histogram()
+
+
+e13.ge.2020.labels@meta.data %>%
+  as_tibble(rownames = NA) %>%
+  rownames_to_column(var = "cell") %>%
+  select(cell, starts_with("prediction")) %>%
+  select(-prediction.score.max) %>%
+  pivot_longer(-cell) %>%
+  ggplot(aes(x = value)) +
+  geom_histogram() +
+  facet_wrap(~ name)
+  
+
+# How many of each cell type, based on prediction.score.max?
+e13.ge.2020.labels@meta.data %>%
+  as_tibble(rownames = NA) %>%
+  rownames_to_column(var = "cell") %>%
+  select(cell, starts_with("prediction")) %>%
+  select(-prediction.score.max) %>%
+  pivot_longer(-cell) %>%
+  group_by(cell) %>%
+  slice_max(value, n = 1) %>%
+  ungroup() %>%
+  group_by(name) %>%
+  summarise(n = n()) %>%
+  arrange(desc(n)) %>% View()
+
+
+# Try to pick a single cell type for each cell
+e13.ge.2020.labels.test <- e13.ge.2020.labels
+
+e13.ge.2020.labels.test@meta.data <-
+  e13.ge.2020.labels.test@meta.data %>%
+  as_tibble(rownames = NA) %>%
+  rownames_to_column(var = "cell") %>%
+  select(-prediction.score.max) %>%
+  pivot_longer(starts_with("prediction.score"),
+               names_to = "cell_type",
+               values_to = "score") %>%
+  mutate(cell_type = sub(pattern = "prediction.score.", replacement = "", x = cell_type),
+         cell_type_broad = str_split_fixed(string = cell_type, pattern = "\\.", n = 2)[,1]) %>%
+  group_by(cell) %>%
+  slice_max(score, n = 1) %>%
+  column_to_rownames(var = "cell")
+
+DimPlot(e13.ge.2020.labels.test, group.by = "cell_type")
+DimPlot(e13.ge.2020.labels.test, group.by = "cell_type_broad")
+
+# Apply a score threshold
+e13.ge.2020.labels.test@meta.data <-
+  e13.ge.2020.labels.test@meta.data %>%
+  mutate(cell_type_broad_threshold = case_when(score >= 0.5 ~ cell_type_broad,
+                                               score < 0.5 ~ "uncertain"))
+
+DimPlot(e13.ge.2020.labels.test, group.by = "cell_type_broad_threshold")
